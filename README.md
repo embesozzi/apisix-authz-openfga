@@ -1,7 +1,7 @@
 # Apache APISIX Plugin Authorization OpenFGA for FGA
 
-This directory contains a plugin to integrate [OpenFGA](https://openfga.dev/) with Apache APISIX to perform API authorization based ReBAC.   
-Refer to FGA based Zanzibar Platform for more information on [OpenFGA](https://openfga.dev/).
+This directory contains a plugin to integrate [OpenFGA](https://openfga.dev/) with [Apache APISIX](https://apisix.apache.org/) to perform API authorization based Relationship-Based Access Control (ReBAC).   
+Refer to the FGA-based Zanzibar Platform for more information on [OpenFGA](https://openfga.dev/).
 
 This plugin will:
 
@@ -44,13 +44,13 @@ cp apisix/plugins/authz-openfga.lua /usr/local/apisix/lua/apisix/plugins
 ## Modify configuration, add plugins
 Modify the configuration file /usr/local/apisix/conf/config.yaml and add it authz-openfga to plugins.
 
-```
+```yaml
    - authz-openfga
 ```
 
 And also enable the plugin cache:
 
-```
+```yaml
 nginx_config:
     http_configuration_snippet: |
     ...
@@ -60,7 +60,8 @@ nginx_config:
 ```
 
 # Use Cases
-The use cases are explaing in the following medium article [soon] and the following workshop [soon].
+The use cases are explaing in the following medium article "Mastering Access Control: Implementing Low-Code Authorization Based on ReBAC and Decoupling Pattern":   
+- https://embesozzi.medium.com/mastering-access-control-implementing-low-code-authorization-based-on-rebac-and-decoupling-pattern-f6f54f70115e
 
 
 # Other edition of the Plugin
