@@ -94,7 +94,7 @@ local function authz_model_cache_set(type, key, value, exp)
         if err then
             log.error("authz_model_cache_set error=", err)
         else
-            log.error("authz_model_cache_set success=", success)
+            log.debug("authz_model_cache_set success=", success)
         end
     else
         log.error("dict not found=", type)    
@@ -181,7 +181,7 @@ local function authorization_model_get(conf)
         end
 
         local authz_model = json_authz_models.authorization_models[1]
-        core.log.error("first authz model id: ", authz_model.id)
+        core.log.debug("first authz model id: ", authz_model.id)
         authorization_model_json = {
             store_id = store.id,
             authorization_model_id = authz_model.id
@@ -269,11 +269,11 @@ function _M.access(conf, ctx)
     end
 
     if not data.allowed then
-        log.error("user " .. user_jwt_claim_value .. " not authorized")
+        log.info("user " .. user_jwt_claim_value .. " not authorized")
         return 403, {message = "not authorized"} 
     end
     
-    core.log.debug("user " .. user_jwt_claim_value .. " is allowed")
+    core.log.info("user " .. user_jwt_claim_value .. " is allowed")
 end
 
 return _M
