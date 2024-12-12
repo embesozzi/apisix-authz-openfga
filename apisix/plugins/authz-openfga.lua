@@ -20,6 +20,7 @@ local ngx_re      =   require("ngx.re")
 local http        =   require("resty.http")
 local helper      =   require("apisix.plugins.opa.helper")
 local jwt         =   require("resty.jwt")
+local uuid        =   require("resty.jit-uuid")
 
 local log = core.log
 
@@ -46,37 +47,57 @@ local schema = {
         keepalive = {type = "boolean", default = false},
         keepalive_timeout = {type = "integer", minimum = 1000, default = 60000},
         keepalive_pool = {type = "integer", minimum = 1, default = 5},
-        user_type = {
-            description = "User Type",
-            type = "string",
-            default = "user",
-        },
-        user_jwt_claim = {
-            description = "JWT claim to identify the user",
-            type = "string",
-            default = "preferred_username",
-        },
-        object_type = {
-            description = "Object Type",
-            type = "string",
-            default = "role",
-        },
-        relation = {
-            description = "Relation",
-            type = "string",
-            default = "assignee",
-        },
-        object = {
-            description = "Object",
-            type = "string",
+        check = {
+            type = "object",
+            properties = {
+                condition = {
+                    type = "string",
+                    enum = { "AND", "OR"},
+                    default = "AND",
+                },
+                tuples = {
+                    type = "array",
+                    items = {
+                        type = "object",
+                        properties = {
+                            user_id = {
+                                type = "string",
+                                description = "User ID, can be a JWT claim",
+                            },
+                            user_type = {
+                                description = "User Type",
+                                type = "string",
+                                default = "user",
+                            },
+                            relation = {
+                                type = "string",
+                                description = "Relation of the user to the object",
+                                default = "assignee",
+                            },
+                            object_type = {
+                                type = "string",
+                                description = "Type of the object, e.g. role",
+                                default = "role",
+                            },
+                            object_id = {
+                                type = "string",
+                                description = "ID of the object",
+                            },
+                        },
+                        required = {"user_id", "object_type", "object_id"}, -- Required fields for each tuple
+                    },
+                    minItems = 1,
+                },
+            },
+            required = {"condition", "tuples"}, -- Required fields for check
         },
     },
-    required = {"host","object"},
+    required = {"host","check"},
 }
 
 
 local _M = {
-    version = 0.1,
+    version = 0.2,
     priority = 2599,
     name = plugin_name,
     schema = schema
@@ -92,9 +113,9 @@ local function authz_model_cache_set(type, key, value, exp)
     if dict then
         local success, err, forcible = dict:set(key, value, exp)
         if err then
-            log.error("authz_model_cache_set error=", err)
+            log.error("[authz-openfga] authz_model_cache_set error=", err)
         else
-            log.debug("authz_model_cache_set success=", success)
+            log.debug("[authz-openfga] authz_model_cache_set success=", success)
         end
     else
         log.error("dict not found=", type)    
@@ -161,7 +182,7 @@ local function authorization_model_get(conf)
 
         local stores = json_stores.stores
         local store = stores[1]
-        core.log.debug("First store id: ", store.id)
+        core.log.debug("[authz-openfga] first store id: ", store.id)
 
         endpoint = endpoint .. "/" .. store.id .. "/authorization-models"
 
@@ -181,12 +202,12 @@ local function authorization_model_get(conf)
         end
 
         local authz_model = json_authz_models.authorization_models[1]
-        core.log.debug("first authz model id: ", authz_model.id)
+        core.log.debug("[authz-openfga] first authz model id: ", authz_model.id)
         authorization_model_json = {
             store_id = store.id,
             authorization_model_id = authz_model.id
         }
-        core.log.debug("storing authorization model in cache")
+        core.log.debug("[authz-openfga] storing authorization model in cache")
         authz_model_cache_set( plugin_cache_name, "iga", core.json.encode(authorization_model_json), 1000);
     else
         authorization_model_json = core.json.decode(v)
@@ -194,6 +215,30 @@ local function authorization_model_get(conf)
 
     return authorization_model_json, nil
 end
+
+local function evaluate_batch_check_response(results, condition, tuplesSize)
+    --ToDo: Check correlation_id
+    if not results or not results.result then
+        return false
+    end
+
+    if condition == "AND" then
+        for _, result in pairs(results.result) do
+            if result.allowed == false then
+                return false 
+            end
+        end
+        return true
+    else
+        for _, result in pairs(results.result) do
+            if result.allowed == true then
+                return true
+            end
+        end
+        return false
+    end    
+end
+
 
 local function get_jwt_claim_value(authorization_header, claim_name)
     if not authorization_header then
@@ -207,15 +252,51 @@ end
 
 -- run the Plugin in the access phase of the OpenResty lifecycle
 function _M.access(conf, ctx)
-    
-    local user_jwt_claim_value = get_jwt_claim_value(
-        core.request.header(ctx, "Authorization"),
-        conf.user_jwt_claim
-    )
+    local checks = {}
+    local checkMode = "check";
+    local user_id
 
-    if not user_jwt_claim_value then
-        log.error("failed to get JWT token claim: ", err)
-        return 401, {message = "Missing JWT token claim in request"}
+    if #conf.check.tuples > 1 then
+        checkMode = "batch-check"
+    end    
+
+    for _, tuple in ipairs(conf.check.tuples) do
+                
+        -- Only support jwt claim
+        local user_jwt_claim = tuple.user_id:gsub("claim::", "")
+        
+        user_id = get_jwt_claim_value(
+            core.request.header(ctx, "Authorization"),
+            user_jwt_claim
+        )
+        
+        core.log.info("[authz-openfga] user: " .. user_id)
+
+        if not user_id then
+            log.error("failed to get JWT token claim: ", err)
+            return 401, {message = "Missing JWT token claim in request"}
+        end
+
+        local tuple_key = {
+            user = tuple.user_type .. ":" .. user_id,
+            relation = tuple.relation,
+            object = tuple.object_type .. ":" .. tuple.object_id
+        }
+
+        core.log.info("[authz-openfga] tuple: " .. core.json.encode(tuple_key))
+        
+        if checkMode == "batch-check" then
+            core.table.insert(checks, {
+                tuple_key = tuple_key,
+                -- correlation_id = math.random(1, 20)
+                correlation_id = uuid()
+            })
+        else
+            core.table.insert(checks, {
+                tuple_key = tuple_key
+            })
+        end
+
     end
 
     local authorization_model_json, err = authorization_model_get(conf)
@@ -224,15 +305,24 @@ function _M.access(conf, ctx)
         core.log.error("failed to discover the authorization model, err: ", err)
         return 403
     end
-    
-    local tupleCheck = {
-        tuple_key = {
-              user = conf.user_type .. ":" .. user_jwt_claim_value,
-              relation = conf.relation,
-              object = conf.object_type .. ":" .. conf.object
-        },
-        authorization_model_id = authorization_model_json.authorization_model_id
-    }
+
+    local tupleCheck = {}
+
+    if checkMode == "batch-check" then
+        tupleCheck = {
+            checks = checks,
+            authorization_model_id = authorization_model_json.authorization_model_id
+        }
+    else
+        if #checks > 0 then
+            tupleCheck = {
+                tuple_key = checks[1].tuple_key,
+                authorization_model_id = authorization_model_json.authorization_model_id
+            }
+        end     
+    end
+
+    core.log.info("[authz-openfga] tuple check: " .. core.json.encode(tupleCheck))
 
     local body = core.json.encode(tupleCheck)
 
@@ -251,8 +341,10 @@ function _M.access(conf, ctx)
         params.keepalive_pool = conf.keepalive_pool
     end
     
-    local endpoint = conf.host .. "/stores/".. authorization_model_json.store_id .. "/check"
+    local endpoint = conf.host .. "/stores/".. authorization_model_json.store_id .. "/" .. checkMode
     
+    core.log.info("[authz-openfga] calling endpoint: " .. endpoint)
+
     local httpc = http.new()
     httpc:set_timeout(conf.timeout)
     local res, err = httpc:request_uri(endpoint, params)
@@ -268,12 +360,22 @@ function _M.access(conf, ctx)
         return 503
     end
 
-    if not data.allowed then
-        log.info("user " .. user_jwt_claim_value .. " not authorized")
+    core.log.debug("[authz-openfga] response: " .. core.json.encode(data))
+
+    local is_user_allowed = false
+
+    if checkMode == "batch-check" then
+        is_user_allowed = evaluate_batch_check_response(data, conf.check.condition, #conf.check.tuples)    
+    else    
+        is_user_allowed = data.allowed
+    end
+
+    if not is_user_allowed then
+        log.info("user " .. user_id .. " not authorized")
         return 403, {message = "not authorized"} 
     end
-    
-    core.log.info("user " .. user_jwt_claim_value .. " is allowed")
+
+    core.log.info("user " .. user_id .. " is allowed")
 end
 
 return _M
