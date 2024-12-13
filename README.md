@@ -42,7 +42,7 @@ It also supports the discovery of the Store and Authorization model in the OpenF
 
 | Name         | Type     | Required | Default   | Description                                     |
 |--------------|----------|----------|-----------|-------------------------------------------------|
-| user_id      | string   | True     |           | User ID, can be a JWT claim                     |
+| user_id      | string   | True     |           | User ID (Format `claim::{claim-name}`)          |
 | user_type    | string   | False    | user      | User Type                                       |
 | relation     | string   | False    | assignee  | Relation of the user to the object              |
 | object_type  | string   | True     | role      | Type of the object, e.g., `role`                |
