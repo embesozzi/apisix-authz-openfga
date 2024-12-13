@@ -29,14 +29,14 @@ It also supports the discovery of the Store and Authorization model in the OpenF
 | keepalive                 | boolean  | False    | False             | Enable keepalive for connections               |
 | keepalive_timeout         | integer  | False    | 60000             | Keepalive timeout in milliseconds (min: 1000) |
 | keepalive_pool            | integer  | False    | 5                 | Keepalive pool size (min: 1)                   |
-| check                     | object   | True     |                   | Check configuration for authorization          |
+| check                     | [object](#check-attributes)   | True     |                   | Check configuration for authorization          |
 
 ### `check` Attributes
 
 | Name          | Type          | Required | Default | Description                                              |
 |---------------|---------------|----------|---------|----------------------------------------------------------|
 | condition     | string        | True     | AND     | Condition type: `AND` or `OR`                           |
-| tuples        | array         | True     |         | List of authorization tuples                            |
+| tuples        | [array](#tuples-object-attributes)         | True     |         | List of authorization tuples                            |
 
 ### `tuples` Object Attributes
 
